@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Anyline Barcode Scanner</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    
+    <script src="https://cdn.jsdelivr.net/npm/@anyline/anyline-js@latest/anyline.js"></script> 
+
+    <style>
+        /* CRITICAL FIX: Aggressively ensures 100% height from the root element down to the scanner container */
+        html, body, .modal-overlay, .modal-content, #scanner-root {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden; 
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f4f7f9;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh; 
+            padding: 1rem;
+        }
+        .container {
+            max-width: 400px;
+            width: 100%;
+        }
+        .modal-overlay {
+            display: none; 
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.95);
+            z-index: 50;
+        }
+        .modal-content {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+        #scanner-root {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 60;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container bg-white p-6 rounded-xl shadow-2xl border border-gray-100 space-y-4">
+        <h1 class="text-2xl font-bold text-gray-800 border-b pb-2">Anyline Barcode Test</h1>
+
+        <div id="status-message" role="alert" class="p-3 rounded-lg text-sm bg-blue-100 text-blue-700 font-medium">
+            Ready to start the Anyline scanner.
+        </div>
+
+        <button id="scan-barcode-btn" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-lg transition duration-150 ease-in-out shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zm0 6a1 1 0 011-1h12a1 1 0 011 1v4a1 1 0 01-1 1H4a1 1 0 01-1-1v-4zM6 15a1 1 0 000 2h8a1 1 0 000-2H6z" clip-rule="evenodd" />
+            </svg>
+            Start Barcode Scan
+        </button>
+        
+        <div class="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <p class="text-xs uppercase font-semibold text-gray-500">Last Scanned Result:</p>
+            <p id="result-display" class="text-lg font-mono text-green-700 break-all pt-1">No scan data yet.</p>
+        </div>
+    </div>
+
+    <div id="scanner-modal-overlay" class="modal-overlay">
+        <div class="modal-content">
+            <div id="scanner-root"></div>
+            
+            <button id="close-scanner-btn" class="absolute top-4 right-4 bg-red-600 hover:bg-red-700 text-white p-3 rounded-full z-100 shadow-xl transition duration-150">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+            </button>
+            
+            <div id="scan-status-overlay" class="absolute bottom-0 left-0 right-0 p-4 bg-gray-900 bg-opacity-70 text-white text-center text-lg font-semibold z-100">
+                Point camera at a barcode.
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // CRITICAL: The license key is no longer stored here. It will be fetched securely.
+        
+        const { init } = window.anylinejs || {}; 
+        let anylineInstance = null; 
+        
+        // Define UI elements
+        const statusMessage = document.getElementById('status-message');
+        const scanBtn = document.getElementById('scan-barcode-btn');
+        const resultDisplay = document.getElementById('result-display');
+        const scannerModalOverlay = document.getElementById('scanner-modal-overlay');
+        const closeScannerBtn = document.getElementById('close-scanner-btn');
+
+        // Configuration for the Plugin (Logic)
+        const PLUGIN_CONFIG = {
+            "id": "barcode",
+            "barcodeConfig": {
+                "barcodeFormatConfig": { "formatIds": ["ANYLINE_BARCODE_FORMAT_ALL"] }
+            },
+            "cancelOnResult": true 
+        };
+
+        // Configuration for the View (UI)
+        const VIEW_CONFIG = {
+            containerId: "scanner-root", 
+            outerColor: '000000',
+            outerAlpha: 0.5,
+            cutouts: [ 
+                {
+                    cutoutConfig: { 
+                        "style": "rect",
+                        "maxWidthPercent": "80%",
+                        "maxHeightPercent": "80%",
+                        "alignment": "center",
+                        "ratioFromSize": { "width": 5, "height": 1 },
+                        "strokeWidth": 2,
+                        "cornerRadius": 4,
+                        "strokeColor": 'FFFFFFFF',
+                        "feedbackStrokeColor": '0099FF',
+                    },
+                    scanFeedback: {
+                        "style": "contour_rect",
+                        "strokeColor": '4CBB17',
+                        "alpha": 0.8
+                    }
+                }
+            ]
+        };
+
+        // --- UTILITY FUNCTIONS ---
+
+        function updateStatus(message, type = 'info') {
+            console.log(`[Anyline Status]: ${message}`);
+            statusMessage.textContent = message;
+            statusMessage.classList.remove('bg-red-100', 'text-red-700', 'bg-green-100', 'text-green-700', 'bg-blue-100', 'text-blue-700');
+            
+            if (type === 'error') {
+                statusMessage.classList.add('bg-red-100', 'text-red-700');
+            } else if (type === 'success') {
+                statusMessage.classList.add('bg-green-100', 'text-green-700');
+            } else {
+                 statusMessage.classList.add('bg-blue-100', 'text-blue-700');
+            }
+        }
+
+        // --- ANYLINE CORE FUNCTIONS ---
+
+        /**
+         * Initializes the Anyline SDK instance and securely fetches the license key.
+         */
+        async function initAnyline() {
+            if (!init) {
+                updateStatus('CRITICAL ERROR: Anyline SDK module failed to load. Check the CDN script tag or network.', 'error');
+                return null;
+            }
+
+            updateStatus('Anyline SDK modules loaded. Attempting to fetch license key...', 'info');
+            scanBtn.disabled = true;
+            const root = document.getElementById('scanner-root');
+
+            let licenseKey = null;
+            try {
+                // Fetch the key securely from the Netlify Function endpoint
+                const response = await fetch('/.netlify/functions/get-key');
+                if (!response.ok) {
+                     throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                licenseKey = data.key;
+            } catch (error) {
+                console.error('Failed to fetch license key:', error);
+                updateStatus('ERROR: Could not fetch license key securely. Check Netlify deployment.', 'error');
+                scanBtn.disabled = false;
+                return null;
+            }
+            
+            try {
+                console.log("Current Deployment URL:", window.location.href);
+                
+                const instance = init({
+                    license: licenseKey, // Use the SECURELY fetched key
+                    element: root,
+                    config: PLUGIN_CONFIG, 
+                    viewConfig: VIEW_CONFIG,
+                    cameraConfig: {
+                        // FIX: Use standard facingMode constraint to force front camera (user).
+                        facingMode: 'user', 
+                        preferredResolution: 'VGA' 
+                    }
+                });
+                
+                instance.onResult = function(result) {
+                    console.log('Anyline scan result: ', result);
+                    const barcodeData = result.pluginResult.barcodeResult?.value;
+                    if (barcodeData) {
+                        handleScanResult(barcodeData);
+                    }
+                };
+
+                updateStatus('Anyline SDK initialized successfully.', 'success');
+                scanBtn.disabled = false;
+                return instance;
+                
+            } catch (error) {
+                console.error('Anyline Initialization Error:', error);
+                
+                let userMessage = `Anyline SDK initialization failed: ${error.message}.`;
+                
+                if (error.message.includes('9015')) {
+                    userMessage += " **Configuration is correct.** This error confirms a **license validation failure**. Check your domain and HTTPS setup.";
+                }
+
+                updateStatus(userMessage, 'error');
+                return null;
+            }
+        }
+
+        /**
+         * Starts the barcode scanning process. The initialization is integrated here.
+         */
+        async function startScanner() {
+            scanBtn.disabled = true;
+            // 1. Show the modal overlay immediately
+            scannerModalOverlay.style.display = 'block';
+            
+            // 2. CRITICAL FIX: Initialize Anyline now that the modal is visible and has height.
+            // This call also securely fetches the key first.
+            anylineInstance = await initAnyline();
+
+            if (!anylineInstance) {
+                stopScanner(); // Initialization failed, close modal
+                return; 
+            }
+
+            try {
+                updateStatus('Starting scanner...', 'info');
+
+                // 3. Start the Anyline Scanning Process
+                await anylineInstance.startScanning();
+                
+                document.getElementById('scan-status-overlay').textContent = 'Point camera at a barcode.';
+                updateStatus('Scanning active.', 'info');
+
+            } catch (e) {
+                console.error("Failed to start scanning:", e);
+                
+                let errorMessage = `Failed to start camera: ${e.message}.`;
+                
+                if (e.name === 'NotAllowedError') {
+                    errorMessage = 'Camera access denied 🚫. Please allow camera permissions for this page in your browser settings.';
+                } else if (e.name === 'NotFoundError') {
+                     errorMessage = 'No camera found on this device 📷. Ensure a camera is connected.';
+                } else if (e.message.includes('JSON Parse error')) {
+                     errorMessage = 'Camera failed due to a worker configuration error. Try restarting your browser/PC.';
+                } else if (e.message.includes('9022')) {
+                    errorMessage = 'Rendering Error (9022). The scan window failed to draw despite fixes.';
+                } else {
+                     errorMessage += ' Check browser console (F12) for detailed error.';
+                }
+
+                stopScanner(); // Stop scanning and hide the modal
+                updateStatus(errorMessage, 'error');
+            }
+        }
+
+        /**
+         * Stops the scanner and disposes of the Anyline instance.
+         */
+        async function stopScanner() {
+            if (anylineInstance) {
+                // Dispose completely unmounts the SDK and stops the camera feed.
+                anylineInstance.dispose(); 
+                anylineInstance = null; 
+            }
+            // Ensure the modal is hidden
+            scannerModalOverlay.style.display = 'none';
+            updateStatus('Ready to scan.', 'success');
+            scanBtn.disabled = false;
+        }
+
+        /**
+         * Processes a successful scan result.
+         */
+        function handleScanResult(data) {
+            stopScanner();
+            resultDisplay.textContent = data;
+            updateStatus(`Barcode Scanned: ${data}`, 'success');
+        }
+
+        // --- APP STARTUP ---
+        
+        document.addEventListener('DOMContentLoaded', () => {
+            scanBtn.addEventListener('click', () => {
+                if (!scanBtn.disabled) {
+                    startScanner(); 
+                }
+            });
+            closeScannerBtn.addEventListener('click', () => stopScanner()); 
+            
+            // Initial button state is enabled
+            scanBtn.disabled = false;
+        });
+    </script>
+</body>
+</html>
