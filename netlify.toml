@@ -1,0 +1,3 @@
+[build]
+  publish = "/"         # Folder containing your web2.html
+  functions = "functions" # Folder containing your serverless functions
