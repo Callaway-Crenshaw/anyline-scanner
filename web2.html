@@ -7,10 +7,10 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     
-    <script src="https://cdn.jsdelivr.net/npm/@anyline/anyline-js@latest/anyline.js"></script> 
+    <script src="https://cdn.jsdelivr.net/npm/@anyline/anyline-core-sdk@latest/anyline-core-sdk.js"></script> 
 
     <style>
-        /* CRITICAL FIX: Aggressively ensures 100% height from the root element down to the scanner container */
+        /* Ensures 100% height from the root element down to the scanner container */
         html, body, .modal-overlay, .modal-content, #scanner-root {
             height: 100%;
             margin: 0;
@@ -95,9 +95,8 @@
     </div>
 
     <script>
-        // CRITICAL: The license key is no longer stored here. It will be fetched securely.
-        
-        const { init } = window.anylinejs || {}; 
+        // Use the globally exposed CoreSDK class
+        const { CoreSDK } = window.Anyline; 
         let anylineInstance = null; 
         
         // Define UI elements
@@ -165,12 +164,12 @@
          * Initializes the Anyline SDK instance and securely fetches the license key.
          */
         async function initAnyline() {
-            if (!init) {
-                updateStatus('CRITICAL ERROR: Anyline SDK module failed to load. Check the CDN script tag or network.', 'error');
+            if (!CoreSDK) {
+                updateStatus('CRITICAL ERROR: Anyline Core SDK module failed to load. Check the CDN script tag or network.', 'error');
                 return null;
             }
 
-            updateStatus('Anyline SDK modules loaded. Attempting to fetch license key...', 'info');
+            updateStatus('Anyline Core SDK modules loaded. Attempting to fetch license key...', 'info');
             scanBtn.disabled = true;
             const root = document.getElementById('scanner-root');
 
@@ -179,32 +178,34 @@
                 // Fetch the key securely from the Netlify Function endpoint
                 const response = await fetch('/.netlify/functions/get-key');
                 if (!response.ok) {
-                     throw new Error(`HTTP error! status: ${response.status}`);
+                     throw new Error(`HTTP error! status: ${response.status}. Please check Netlify function logs.`);
                 }
                 const data = await response.json();
                 licenseKey = data.key;
             } catch (error) {
                 console.error('Failed to fetch license key:', error);
-                updateStatus('ERROR: Could not fetch license key securely. Check Netlify deployment.', 'error');
+                updateStatus(`ERROR: Could not fetch license key securely. ${error.message}`, 'error');
                 scanBtn.disabled = false;
                 return null;
             }
             
             try {
-                console.log("Current Deployment URL:", window.location.href);
-                
-                const instance = init({
-                    license: licenseKey, // Use the SECURELY fetched key
+                // IMPORTANT: Initialize the CoreSDK instance
+                const instance = new CoreSDK({
+                    license: licenseKey, 
                     element: root,
                     config: PLUGIN_CONFIG, 
                     viewConfig: VIEW_CONFIG,
                     cameraConfig: {
-                        // FIX: Use standard facingMode constraint to force front camera (user).
-                        facingMode: 'user', 
+                        facingMode: 'user', // Forces front camera for PC/laptop
                         preferredResolution: 'VGA' 
                     }
                 });
                 
+                // IMPORTANT: Wait for the SDK to be ready (including Web Worker loading)
+                await instance.ready;
+
+                // Setup the result handler
                 instance.onResult = function(result) {
                     console.log('Anyline scan result: ', result);
                     const barcodeData = result.pluginResult.barcodeResult?.value;
@@ -213,7 +214,7 @@
                     }
                 };
 
-                updateStatus('Anyline SDK initialized successfully.', 'success');
+                updateStatus('Anyline SDK initialized and ready.', 'success');
                 scanBtn.disabled = false;
                 return instance;
                 
@@ -223,7 +224,9 @@
                 let userMessage = `Anyline SDK initialization failed: ${error.message}.`;
                 
                 if (error.message.includes('9015')) {
-                    userMessage += " **Configuration is correct.** This error confirms a **license validation failure**. Check your domain and HTTPS setup.";
+                    userMessage += " **CRITICAL: License Domain Mismatch (Error 9015).** Your Netlify domain must be whitelisted in the Anyline License Portal.";
+                } else if (error.message.includes('Web Worker')) {
+                    userMessage = 'Camera failed due to a worker configuration error. Try restarting your browser/PC.';
                 }
 
                 updateStatus(userMessage, 'error');
@@ -232,15 +235,14 @@
         }
 
         /**
-         * Starts the barcode scanning process. The initialization is integrated here.
+         * Starts the barcode scanning process.
          */
         async function startScanner() {
             scanBtn.disabled = true;
             // 1. Show the modal overlay immediately
             scannerModalOverlay.style.display = 'block';
             
-            // 2. CRITICAL FIX: Initialize Anyline now that the modal is visible and has height.
-            // This call also securely fetches the key first.
+            // 2. Initialize Anyline and wait for it to be ready
             anylineInstance = await initAnyline();
 
             if (!anylineInstance) {
@@ -264,12 +266,6 @@
                 
                 if (e.name === 'NotAllowedError') {
                     errorMessage = 'Camera access denied 🚫. Please allow camera permissions for this page in your browser settings.';
-                } else if (e.name === 'NotFoundError') {
-                     errorMessage = 'No camera found on this device 📷. Ensure a camera is connected.';
-                } else if (e.message.includes('JSON Parse error')) {
-                     errorMessage = 'Camera failed due to a worker configuration error. Try restarting your browser/PC.';
-                } else if (e.message.includes('9022')) {
-                    errorMessage = 'Rendering Error (9022). The scan window failed to draw despite fixes.';
                 } else {
                      errorMessage += ' Check browser console (F12) for detailed error.';
                 }
